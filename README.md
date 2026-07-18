@@ -8,6 +8,14 @@ links**. A *For You* strip at the top curates what to read next from your own
 reading history, the way a news carousel does, but from ad-free, direct
 publisher sources.
 
+It opens on a **constructive home page** — today's featured knowledge, topics
+adjacent to what you study, civic facts about your own area, and your saved
+library. Deliberately *not* a breaking-news or outrage stream: the goal is a
+starting point that informs and grounds you rather than mining your attention.
+Every traditional browser affordance (history, back, close a tab) is reachable
+by both a keyboard shortcut and a toolbar click — the keyboard just means you
+rarely need the mouse.
+
 ## Why it looks the way it does
 
 The layout is deliberately monotonous: one accent color, one column width, the
@@ -50,6 +58,11 @@ Requires Python 3.9+.
 
 ## Using it
 
+- **Home page** — opens on launch and in every new tab. Set your locale with
+  `:area <your city>` to get civic facts and local topics; nothing here is an
+  ad or an outrage feed.
+- **Commands** — type these in the address bar: `:home`, `:history`,
+  `:library`, `:area <place>`.
 - **Read anything** — type a URL in the top bar, Enter. The page loads ad-free.
 - **Search / research** — type words instead of a URL to get a clickable results
   list (Hacker News full-text + Wikipedia).
@@ -95,6 +108,7 @@ and a source-diversity cap keeps any single site from dominating the strip.
 | --- | --- |
 | `Ctrl+L` | Jump to the address/search bar |
 | `Ctrl+B` | Back (within the current tab) |
+| `Ctrl+H` | Open history |
 | `Ctrl+S` | Save / unsave the current article to the Library |
 | `Ctrl+Y` | Open the Library |
 | `Ctrl+T` | New tab |
@@ -127,18 +141,24 @@ and a source-diversity cap keeps any single site from dominating the strip.
   `(via wayback)` when a page came from the archive. The Wayback fallback is the
   only time a URL you visit is sent to a third party (archive.org), and only
   after a direct read has failed.
-- **Your data stays local** — reading history, topic weights, and your saved
-  **Library** live in `~/.termbrow/` as plain, inspectable JSON
-  (`history.json`, `keywords.json`, `library.json`). Delete any of them to reset.
+- **Constructive by design** — the home page draws only from knowledge, learning,
+  and civic sources (Wikipedia's featured feed, interest-adjacent topics, civic
+  facts for your area). It never pulls a breaking-news / outrage stream, because
+  the point is to inform without preying on negativity bias.
+- **Your data stays local** — reading history, topic weights, your saved
+  **Library**, and preferences live in `~/.termbrow/` as plain, inspectable JSON
+  (`history.json`, `keywords.json`, `library.json`, `prefs.json`). Delete any of
+  them to reset.
 
 ## Layout
 
 ```
 termbrow/
-  app.py      # Textual TUI: tabs, theme, navigation, library, wiring
+  app.py      # Textual TUI: tabs, toolbar, navigation, commands, wiring
+  home.py     # constructive home page (Wikipedia featured, learn, civic, library)
   fetch.py    # fetch chain (direct → browser headers → Wayback) + ad-strip
   curate.py   # search + For You feed with explore/exploit (HN, Wikipedia, RSS)
-  store.py    # local reading history, decaying topic weights, saved library
+  store.py    # local history, topic weights, saved library, preferences
 ```
 
 ## License

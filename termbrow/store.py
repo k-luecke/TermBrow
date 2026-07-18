@@ -14,6 +14,7 @@ CONFIG_DIR = Path.home() / ".termbrow"
 HISTORY_FILE = CONFIG_DIR / "history.json"
 KEYWORDS_FILE = CONFIG_DIR / "keywords.json"
 LIBRARY_FILE = CONFIG_DIR / "library.json"
+PREFS_FILE = CONFIG_DIR / "prefs.json"
 
 # How much a single visit boosts a keyword, and how fast interest decays each
 # time we re-score. Decay keeps the feed following *recent* attention rather
@@ -119,8 +120,26 @@ def remove_article(url: str) -> bool:
     return True
 
 
+# --------------------------------------------------------------- preferences
+# Small key/value settings the reader chooses explicitly (e.g. their locale for
+# the homepage's civic section). Kept separate from inferred interest data.
+
+def load_prefs() -> dict:
+    return _read_json(PREFS_FILE, {})
+
+
+def get_pref(key: str, default=None):
+    return load_prefs().get(key, default)
+
+
+def set_pref(key: str, value) -> None:
+    prefs = load_prefs()
+    prefs[key] = value
+    _write_json(PREFS_FILE, prefs)
+
+
 def clear_all() -> None:
-    for p in (HISTORY_FILE, KEYWORDS_FILE, LIBRARY_FILE):
+    for p in (HISTORY_FILE, KEYWORDS_FILE, LIBRARY_FILE, PREFS_FILE):
         try:
             p.unlink()
         except FileNotFoundError:

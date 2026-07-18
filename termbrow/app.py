@@ -6,12 +6,14 @@ chrome in the same place on every page. Minimizing contextual shifts between
 pages is what lets the reader keep attention on the material instead of
 re-orienting to a new layout each time.
 
-Tabs preserve that stability across parallel reads: opening a link in a new tab
-keeps the page you were on intact, so a tangent never costs you your place.
+Tabs preserve that stability across parallel reads; a constructive home page
+sets the tone on open; and every traditional affordance (history, back, close a
+tab) is reachable by both a keyboard shortcut and a toolbar click — the keyboard
+just means you rarely need the mouse.
 """
 from __future__ import annotations
 
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 from textual import work
@@ -21,26 +23,11 @@ from textual.widgets import (
     Button, Footer, Header, Input, Markdown, Static, TabbedContent, TabPane,
 )
 
-from . import curate, store
+from . import curate, home, store
 from .fetch import Page, fetch_page
 
-WELCOME = """\
-# TermBrow
-
-A clickable, ad-free terminal browser tuned for **reading** and **research**.
-
-- Type a **URL** or a **search query** in the bar above and press Enter.
-- Every link below is **clickable** — click to follow it, ad-free.
-- The **For You** strip up top learns from what you read (`Ctrl+E` tunes it).
-- Save what you enjoy with `Ctrl+S`; open your **Library** with `Ctrl+Y`.
-- Open links in a **new tab** (`Ctrl+N` toggles) so you never lose your place.
-
-Try clicking one of these to start:
-
-1. [Cognitive load (Wikipedia)](https://en.wikipedia.org/wiki/Cognitive_load)
-2. [The value of deep reading (Ars Technica)](https://arstechnica.com/science/)
-3. [Hacker News front page items appear in your feed above]\
-"""
+# Brief placeholder shown for the instant before the home page finishes loading.
+PLACEHOLDER = "# TermBrow\n\n*Loading your home page…*"
 
 
 class FeedButton(Button):
@@ -70,12 +57,12 @@ class ReaderTab(TabPane):
         self.nav: list[str] = []          # per-tab navigation back-stack (URLs)
         self.page_url: str = ""           # canonical URL of the current article
         self.page_title: str = title
-        self.view: str = "welcome"        # welcome | article | search | library
+        self.view: str = "home"           # home | article | search | library | history
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="reader"):
             with Center():
-                yield Markdown(WELCOME, classes="article")
+                yield Markdown(PLACEHOLDER, classes="article")
 
     @property
     def article(self) -> Markdown:
@@ -93,10 +80,16 @@ class TermBrow(App):
     CSS = """
     Screen { background: $background; }
 
+    /* Toolbar: mouse parity for the traditional actions, beside the address. */
+    #toolbar { height: 3; margin: 0 1; }
+    .navbtn {
+        width: 5; min-width: 5; height: 3; margin: 0 1 0 0;
+        border: round $accent 30%; background: $surface; color: $text;
+    }
+    .navbtn:hover { border: round $accent; color: $accent; }
     #addrbar {
-        margin: 0 1;
-        border: round $accent 40%;
-        background: $surface;
+        width: 1fr; height: 3;
+        border: round $accent 40%; background: $surface;
     }
     #addrbar:focus { border: round $accent; }
 
@@ -110,7 +103,6 @@ class TermBrow(App):
         color: $text; text-align: left;
     }
     .feed-item:hover { border: round $accent; }
-    /* Discoveries: a quiet secondary tint — visible, still within one system. */
     .feed-item.discover { border: round $secondary 50%; color: $text-muted; }
     .feed-item.discover:hover { border: round $secondary; }
 
@@ -128,6 +120,7 @@ class TermBrow(App):
     BINDINGS = [
         ("ctrl+l", "focus_address", "Address"),
         ("ctrl+b", "back", "Back"),
+        ("ctrl+h", "show_history", "History"),
         ("ctrl+t", "new_tab", "New tab"),
         ("ctrl+w", "close_tab", "Close tab"),
         ("ctrl+pagedown", "next_tab", "Next tab"),
@@ -154,7 +147,12 @@ class TermBrow(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        yield Input(placeholder="Enter a URL or a search query…  (Ctrl+L)", id="addrbar")
+        with Horizontal(id="toolbar"):
+            yield Button("‹", id="tb-back", classes="navbtn")
+            yield Button("⌂", id="tb-home", classes="navbtn")
+            yield Input(placeholder="URL, search, or :command …  (Ctrl+L)", id="addrbar")
+            yield Button("+", id="tb-new", classes="navbtn")
+            yield Button("✕", id="tb-close", classes="navbtn")
         with Horizontal(id="feed-wrap"):
             yield Static("For You", id="feed-label")
         yield HorizontalScroll(id="feed")
@@ -166,12 +164,16 @@ class TermBrow(App):
     # ------------------------------------------------------------------ mount
     def on_mount(self) -> None:
         self.theme = "textual-dark"
+        # Tooltips make the icon toolbar self-explanatory.
+        self.query_one("#tb-back", Button).tooltip = "Back (Ctrl+B)"
+        self.query_one("#tb-home", Button).tooltip = "Home (:home)"
+        self.query_one("#tb-new", Button).tooltip = "New tab (Ctrl+T)"
+        self.query_one("#tb-close", Button).tooltip = "Close tab (Ctrl+W)"
+        self.go_home()
         self.refresh_feed()
 
     # --------------------------------------------------------------- helpers
     def _status(self, msg: str) -> None:
-        # Guarded: a worker may finish just as the app is tearing down, after
-        # the status widget has left the DOM — that's harmless, not an error.
         try:
             self.query_one("#status", Static).update(msg)
         except Exception:
@@ -195,7 +197,6 @@ class TermBrow(App):
             pass
 
     def _sync_chrome(self, tab: ReaderTab) -> None:
-        """Point the shared chrome (address bar, title) at `tab`'s state."""
         self.query_one("#addrbar", Input).value = tab.page_url
         self.sub_title = tab.page_title[:60] if tab.page_title else "reading browser"
 
@@ -219,29 +220,108 @@ class TermBrow(App):
         value = event.value.strip()
         if not value:
             return
-        if self._looks_like_url(value):
+        if value.startswith(":"):
+            self._run_command(value[1:].strip())
+        elif self._looks_like_url(value):
             self.load_url(value)
         else:
             self.run_search(value)
 
+    def _run_command(self, cmd: str) -> None:
+        name, _, rest = cmd.partition(" ")
+        name, rest = name.lower(), rest.strip()
+        if name in ("home", "h"):
+            self.go_home()
+        elif name == "history":
+            self.show_history()
+        elif name in ("library", "lib"):
+            self.show_library()
+        elif name == "area":
+            if rest:
+                store.set_pref("area", rest)
+                self._status(f"Area set to “{rest}”. Refreshing home…")
+                self.go_home()
+            else:
+                self._status("Usage: :area <your city or region>")
+        else:
+            self._status(f"Unknown command “:{cmd}”. Try :home, :history, :area <place>.")
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if isinstance(event.button, FeedButton):
-            self.load_url(event.button.url)
+        button = event.button
+        if isinstance(button, FeedButton):
+            self.load_url(button.url)
+            return
+        action = {
+            "tb-back": self.action_back,
+            "tb-home": self.action_home,
+            "tb-new": self.action_new_tab,
+            "tb-close": self.action_close_tab,
+        }.get(button.id or "")
+        if action:
+            action()
 
     def on_markdown_link_clicked(self, event: Markdown.LinkClicked) -> None:
-        # Every clickable link (article, search results, library) loads here.
         event.stop()
-        self.load_url(event.href)
+        href = event.href
+        if href.startswith("termbrow:"):
+            self._handle_internal(href)
+        else:
+            self.load_url(href)
+
+    def _handle_internal(self, href: str) -> None:
+        """In-app action links from the home page (keyboard- or mouse-driven)."""
+        rest = href[len("termbrow:"):]
+        name, _, query = rest.partition("?")
+        if name == "home":
+            self.go_home()
+        elif name == "history":
+            self.show_history()
+        elif name == "library":
+            self.show_library()
+        elif name == "area":
+            addr = self.query_one("#addrbar", Input)
+            addr.focus()
+            addr.value = ":area "
+            addr.action_end()
+            self._status("Type your city or region, then Enter.")
+        elif name == "search":
+            params = parse_qs(query)
+            q = unquote((params.get("q") or [""])[0])
+            if q:
+                self.run_search(q)
+        else:
+            self._status(f"Unknown action: {href}")
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         tab = self.active_tab()
         if isinstance(tab, ReaderTab):
             self._sync_chrome(tab)
 
+    # -------------------------------------------------------------- home page
+    def go_home(self, tab: ReaderTab | None = None) -> None:
+        self.run_worker(self._go_home(tab), group="load", exclusive=False)
+
+    async def _go_home(self, tab: ReaderTab | None) -> None:
+        tab = tab or self.active_tab()
+        self._status("Loading home…")
+        try:
+            md = await home.build_homepage(
+                store.get_pref("area"), store.top_keywords(), store.load_library()
+            )
+        except Exception as exc:
+            md = f"# TermBrow\n\nCouldn't build the home page: {exc}"
+        tab.view = "home"
+        tab.page_url = ""
+        tab.page_title = "Home"
+        await tab.article.update(md)
+        tab.scroller.scroll_home(animate=False)
+        self._set_tab_label(tab, "⌂ Home")
+        if tab is self.active_tab():
+            self._sync_chrome(tab)
+            self._status("Home — a calmer place to start.")
+
     # ------------------------------------------------------------ navigation
     def load_url(self, url: str, *, new_tab: bool | None = None, push: bool = True) -> None:
-        """Public entry point. Dispatches the actual fetch onto a worker so the
-        UI stays responsive; `new_tab` defaults to the Ctrl+N toggle."""
         if new_tab is None:
             new_tab = self._new_tab_links
         self.run_worker(
@@ -253,7 +333,6 @@ class TermBrow(App):
         if not urlparse(url).scheme and "." in url:
             url = "https://" + url
 
-        # A new-tab open stays in the background so the current page isn't lost.
         if new_tab:
             tab = await self._new_tab("Loading…", activate=False)
         else:
@@ -265,7 +344,7 @@ class TermBrow(App):
         except httpx.HTTPStatusError as exc:
             self._show_error(tab, url, f"HTTP {exc.response.status_code}")
             return
-        except Exception as exc:  # transport, timeout, malformed URL, …
+        except Exception as exc:
             self._show_error(tab, url, str(exc) or exc.__class__.__name__)
             return
 
@@ -287,7 +366,6 @@ class TermBrow(App):
         else:
             self._status(f"Opened in new tab: {page.title[:50]}{via}  (Ctrl+PgDn)")
 
-        # Remember what was read, then let the feed follow that attention.
         store.record_visit(page.url, page.title)
         store.bump_keywords(page.keywords)
         self.refresh_feed()
@@ -334,6 +412,59 @@ class TermBrow(App):
         self._sync_chrome(tab)
         self._status(f"{len(results)} results for “{query}”.")
 
+    # -------------------------------------------------------- library/history
+    @work(exclusive=True, group="search")
+    async def show_library(self) -> None:
+        tab = self.active_tab()
+        lib = store.load_library()
+        if not lib:
+            md = (
+                "# Library\n\nYour library is empty.\n\n"
+                "While reading an article, press **Ctrl+S** to save it here."
+            )
+        else:
+            lines = [f"# Library — {len(lib)} saved", ""]
+            for i, item in enumerate(lib, 1):
+                host = (urlparse(item["url"]).hostname or "").replace("www.", "")
+                lines.append(f"{i}. [{item['title']}]({item['url']})  ·  *{host}*")
+            lines.append("\n*Open one to read it. Ctrl+S again while reading removes it.*")
+            md = "\n".join(lines)
+        await self._render_view(tab, "library", "Library", "★ Library", md)
+        self._status(f"Library: {len(lib)} saved article(s).")
+
+    @work(exclusive=True, group="search")
+    async def show_history(self) -> None:
+        tab = self.active_tab()
+        history = store.load_history()
+        seen: set[str] = set()
+        recent = []
+        for visit in reversed(history):        # newest first, de-duplicated
+            if visit.url in seen:
+                continue
+            seen.add(visit.url)
+            recent.append(visit)
+        if not recent:
+            md = "# History\n\nNothing here yet — pages you read will be listed here."
+        else:
+            lines = [f"# History — {len(recent)} recent", ""]
+            for i, visit in enumerate(recent[:150], 1):
+                host = (urlparse(visit.url).hostname or "").replace("www.", "")
+                lines.append(f"{i}. [{visit.title}]({visit.url})  ·  *{host}*")
+            md = "\n".join(lines)
+        await self._render_view(tab, "history", "History", "⏱ History", md)
+        self._status(f"History: {len(recent)} page(s).")
+
+    async def _render_view(
+        self, tab: ReaderTab, view: str, title: str, label: str, md: str
+    ) -> None:
+        tab.view = view
+        tab.page_url = ""
+        tab.page_title = title
+        await tab.article.update(md)
+        tab.scroller.scroll_home(animate=False)
+        self._set_tab_label(tab, label)
+        self._sync_chrome(tab)
+
     # ------------------------------------------------------------------ feed
     @work(exclusive=True, group="feed")
     async def refresh_feed(self) -> None:
@@ -360,32 +491,6 @@ class TermBrow(App):
         except Exception:
             pass  # app tearing down mid-refresh — nothing to render into
 
-    # --------------------------------------------------------------- library
-    @work(exclusive=True, group="search")
-    async def show_library(self) -> None:
-        tab = self.active_tab()
-        lib = store.load_library()
-        if not lib:
-            md = (
-                "# Library\n\nYour library is empty.\n\n"
-                "While reading an article, press **Ctrl+S** to save it here."
-            )
-        else:
-            lines = [f"# Library — {len(lib)} saved", ""]
-            for i, item in enumerate(lib, 1):
-                host = (urlparse(item["url"]).hostname or "").replace("www.", "")
-                lines.append(f"{i}. [{item['title']}]({item['url']})  ·  *{host}*")
-            lines.append("\n*Open one to read it. Ctrl+S again while reading removes it.*")
-            md = "\n".join(lines)
-        tab.view = "library"
-        tab.page_url = ""
-        tab.page_title = "Library"
-        await tab.article.update(md)
-        tab.scroller.scroll_home(animate=False)
-        self._set_tab_label(tab, "★ Library")
-        self._sync_chrome(tab)
-        self._status(f"Library: {len(lib)} saved article(s).")
-
     # --------------------------------------------------------------- actions
     def action_focus_address(self) -> None:
         addr = self.query_one("#addrbar", Input)
@@ -395,23 +500,25 @@ class TermBrow(App):
     def action_focus_reader(self) -> None:
         self.active_tab().scroller.focus()
 
+    def action_home(self) -> None:
+        self.go_home()
+
     def action_back(self) -> None:
         tab = self.active_tab()
         if len(tab.nav) < 2:
             self._status("No page to go back to in this tab.")
             return
-        tab.nav.pop()               # drop current
+        tab.nav.pop()
         target = tab.nav[-1]
         self.load_url(target, new_tab=False, push=False)
 
     def action_new_tab(self) -> None:
-        self.run_worker(self._open_blank_tab(), group="tabs", exclusive=False)
+        self.run_worker(self._open_new_tab(), group="tabs", exclusive=False)
 
-    async def _open_blank_tab(self) -> None:
+    async def _open_new_tab(self) -> None:
         tab = await self._new_tab("New Tab", activate=True)
-        self._sync_chrome(tab)
+        await self._go_home(tab)          # new tabs open the home page
         self.action_focus_address()
-        self._status("New tab. Type a URL or search.")
 
     def action_close_tab(self) -> None:
         tc = self._tabs()
@@ -455,6 +562,9 @@ class TermBrow(App):
 
     def action_show_library(self) -> None:
         self.show_library()
+
+    def action_show_history(self) -> None:
+        self.show_history()
 
     def action_refresh_feed(self) -> None:
         self._status("Refreshing feed…")
