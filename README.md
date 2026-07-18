@@ -25,16 +25,42 @@ attention stays on the material, not on re-orienting to each new layout.
 
 ## Install & run
 
-**Recommended — one line, then a real `termbrow` command** (needs
-[pipx](https://pipx.pypa.io); `python -m pip install --user pipx` if you don't
-have it). pipx installs TermBrow into its own isolated environment:
+**Recommended — [pipx](https://pipx.pypa.io) installs TermBrow into its own
+isolated environment and gives you a real `termbrow` command.**
+
+If you don't already have pipx, bootstrap it first (one time):
+
+```bash
+python -m pip install --user pipx
+python -m pipx ensurepath
+```
+
+> **Then reopen your terminal.** `ensurepath` adds pipx's app folder to your
+> PATH, but an already-open shell won't see the change until you start a new one
+> — otherwise the next step's `termbrow`/`pipx` command reports "not recognized".
+
+Now install and run:
 
 ```bash
 pipx install git+https://github.com/k-luecke/TermBrow
 termbrow
 ```
 
-To update later: `pipx upgrade termbrow`. To remove: `pipx uninstall termbrow`.
+Reopen your terminal once more after installing so the new `termbrow` command is
+on PATH. To update later: `pipx upgrade termbrow`. To remove:
+`pipx uninstall termbrow`.
+
+<details>
+<summary>Windows / PowerShell notes</summary>
+
+Use `python` (as above); the commands are identical. If `termbrow` still isn't
+found in a fresh terminal, the app was installed to `%USERPROFILE%\.local\bin` —
+you can run it directly with:
+
+```powershell
+& "$env:USERPROFILE\.local\bin\termbrow.exe"
+```
+</details>
 
 <details>
 <summary>Alternatives (plain pip, or run from a clone)</summary>
