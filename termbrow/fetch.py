@@ -193,6 +193,31 @@ async def _try_wayback(url: str) -> Page | None:
         return None
 
 
+def _impersonate_fetch(url: str, cookie_jar: dict) -> tuple[str, str]:
+    """Blocking fetch with a real Chrome TLS fingerprint (curl_cffi). Many 403s
+    are passive bot checks (Cloudflare/Akamai) that flag Python's TLS handshake;
+    impersonating Chrome slips past them where header spoofing alone can't."""
+    from curl_cffi import requests as cffi  # optional dep, imported lazily
+
+    resp = cffi.get(
+        url, impersonate="chrome", timeout=20,
+        allow_redirects=True, cookies=cookie_jar or None,
+    )
+    resp.raise_for_status()
+    return str(resp.url), resp.text
+
+
+async def _try_impersonate(url: str) -> tuple[Page | None, Exception | None]:
+    try:
+        jar = cookies.cookies_for_url(url)
+        final_url, html = await asyncio.to_thread(_impersonate_fetch, url, jar)
+        page = await asyncio.to_thread(_extract, html, final_url)
+        page.via = "browser-impersonation"
+        return page, None
+    except Exception as exc:  # noqa: BLE001 — surfaced to the caller's chain
+        return None, exc
+
+
 async def _try_onion(url: str, proxy: str) -> Page:
     """Fetch an .onion page through the Tor SOCKS proxy. Tor is slow, so the
     timeout is generous; there is no Wayback/clearnet fallback for onions."""
@@ -237,6 +262,16 @@ async def fetch_page(url: str) -> Page:
             if len(page.markdown) >= _MIN_READABLE:
                 return page
             best = best or page  # keep a thin result as a possible fallback
+
+    # Real-browser TLS impersonation — defeats the common Cloudflare-style 403
+    # that header spoofing can't (the reason many sites "only open in Chrome").
+    imp, err = await _try_impersonate(url)
+    if err is not None and first_error is None:
+        first_error = err
+    if imp is not None:
+        if len(imp.markdown) >= _MIN_READABLE:
+            return imp
+        best = best or imp
 
     wb = await _try_wayback(url)
     if wb is not None and len(wb.markdown) >= _MIN_READABLE:

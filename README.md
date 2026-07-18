@@ -218,12 +218,18 @@ official clearnet site before trusting it. Use Tor for reading, not marketplaces
   can't be opened directly.
 - **Loading "unreadable" sites** — if a direct fetch comes back blocked or
   empty (bot walls, JavaScript-only pages, dead links), TermBrow escalates
-  automatically: first it retries with a full desktop-browser fingerprint, then
-  it falls back to the **Wayback Machine's** latest static snapshot (which is
-  often readable even when the live site isn't). The status bar shows
-  `(via wayback)` when a page came from the archive. The Wayback fallback is the
-  only time a URL you visit is sent to a third party (archive.org), and only
-  after a direct read has failed.
+  automatically:
+  1. retry with a full desktop-browser header set;
+  2. retry with a **real Chrome TLS fingerprint** (`curl_cffi`) — this defeats
+     the common **Cloudflare-style 403** that header spoofing can't, because the
+     block is on Python's TLS handshake, not the headers (it's why some sites
+     "only open in Chrome");
+  3. fall back to the **Wayback Machine's** latest static snapshot.
+
+  The status bar notes when a page came `(via wayback)`. The Wayback fallback is
+  the only time a URL you visit is sent to a third party (archive.org), and only
+  after the direct reads have failed. For sites that need JavaScript or an
+  interactive login, `Ctrl+O` still opens the page in your real browser.
 - **Constructive by design** — the home page draws only from knowledge, learning,
   and civic sources (Wikipedia's featured feed, interest-adjacent topics, civic
   facts for your area). It never pulls a breaking-news / outrage stream, because
@@ -239,7 +245,7 @@ official clearnet site before trusting it. Use Tor for reading, not marketplaces
 termbrow/
   app.py      # Textual TUI: tabs, toolbar, navigation, commands, wiring
   home.py     # constructive home page (Wikipedia featured, learn, civic, library)
-  fetch.py    # fetch chain (direct → browser headers → Wayback) + ad-strip
+  fetch.py    # fetch chain (direct → headers → Chrome-TLS → Wayback) + ad-strip
   curate.py   # search (GDELT news + HN + Wikipedia, sort + per-domain diversity)
               # and the For You feed with explore/exploit
   cookies.py  # session import (browser_cookie3 + cookies.txt) for logged-in reads
