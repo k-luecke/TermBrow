@@ -56,6 +56,7 @@ class Article:
     # "discover" = anchored-but-novel, surfaced by explore mode
     kind: str = "foryou"
     onion: bool = False               # a Tor .onion result (needs verification)
+    date: str = ""                    # e.g. "posted 2024-03-15" / "edited 2024-…"
 
 
 def _host(url: str) -> str:
@@ -76,10 +77,10 @@ def _dedupe(articles: list[Article], limit: int) -> list[Article]:
     return out
 
 
-def _hn_search(query: str, limit: int) -> list[Article]:
+def _hn_search(query: str, limit: int, page: int = 0) -> list[Article]:
     url = (
         "https://hn.algolia.com/api/v1/search"
-        f"?query={quote_plus(query)}&tags=story&hitsPerPage={limit}"
+        f"?query={quote_plus(query)}&tags=story&hitsPerPage={limit}&page={page}"
     )
     r = httpx.get(url, headers=HEADERS, timeout=15)
     r.raise_for_status()
@@ -88,7 +89,11 @@ def _hn_search(query: str, limit: int) -> list[Article]:
         link = hit.get("url")
         title = hit.get("title")
         if link and title:
-            out.append(Article(title=title, url=link, source=_host(link)))
+            posted = (hit.get("created_at") or "")[:10]
+            out.append(Article(
+                title=title, url=link, source=_host(link),
+                date=f"posted {posted}" if posted else "",
+            ))
     return out
 
 
@@ -115,18 +120,27 @@ def _wiki_article(title: str, kind: str = "foryou") -> Article:
     )
 
 
-def _wiki_search(query: str, limit: int) -> list[Article]:
+def _wiki_search(query: str, limit: int, offset: int = 0) -> list[Article]:
     r = httpx.get(
         "https://en.wikipedia.org/w/api.php",
         params={
             "action": "query", "list": "search", "srsearch": query,
-            "format": "json", "srlimit": limit,
+            "format": "json", "srlimit": limit, "sroffset": offset,
+            "srprop": "timestamp",
         },
         headers=WIKI_HEADERS, timeout=15,
     )
     r.raise_for_status()
     hits = r.json().get("query", {}).get("search", [])
-    return [_wiki_article(h["title"]) for h in hits if h.get("title")]
+    out = []
+    for h in hits:
+        if not h.get("title"):
+            continue
+        art = _wiki_article(h["title"])
+        ts = (h.get("timestamp") or "")[:10]  # last revision date
+        art.date = f"edited {ts}" if ts else ""
+        out.append(art)
+    return out
 
 
 def _wiki_top_title(keyword: str) -> str | None:
@@ -232,13 +246,14 @@ def _onion_search(query: str, limit: int) -> list[Article]:
     return out
 
 
-def _search_sync(query: str, limit: int) -> list[Article]:
+def _search_sync(query: str, limit: int, page: int = 0) -> list[Article]:
     per = max(4, limit)
     articles = _dedupe(_gather([
-        lambda: _hn_search(query, per),
-        lambda: _wiki_search(query, 3),
+        lambda: _hn_search(query, per, page=page),
+        lambda: _wiki_search(query, 3, offset=page * 3),
     ]), limit)
-    onions = _onion_search(query, 5)
+    # Onion results are page-0 only (Ahmia paging is unreliable over Tor).
+    onions = _onion_search(query, 5) if page == 0 else []
     if not onions:
         return articles
     # Keep room for onion results (the reader asked for them mixed in), then
@@ -327,8 +342,8 @@ def _feed_sync(keywords, read_urls, explore_ratio, limit) -> list[Article]:
     return _interleave(exp_picks, disc_picks, limit)
 
 
-async def search(query: str, limit: int = 15) -> list[Article]:
-    return await asyncio.to_thread(_search_sync, query, limit)
+async def search(query: str, limit: int = 15, page: int = 0) -> list[Article]:
+    return await asyncio.to_thread(_search_sync, query, limit, page)
 
 
 async def feed(keywords, read_urls=None, explore_ratio: float = 0.4,

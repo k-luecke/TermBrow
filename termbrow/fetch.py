@@ -83,7 +83,8 @@ class Page:
     title: str
     markdown: str
     keywords: list[str]
-    via: str = "direct"  # "direct" | "browser-headers" | "wayback"
+    via: str = "direct"  # "direct" | "browser-headers" | "wayback" | "tor"
+    date: str = ""       # publication date from page metadata, if any
 
 
 def _defuse_ad_links(markdown: str) -> str:
@@ -113,9 +114,12 @@ def extract_keywords(title: str, body: str, n: int = 8) -> list[str]:
 
 def _extract(html: str, url: str) -> Page:
     title = ""
+    date = ""
     meta = trafilatura.extract_metadata(html)
     if meta and meta.title:
         title = meta.title
+    if meta and getattr(meta, "date", None):
+        date = str(meta.date)[:10]  # published date, when the page exposes one
     markdown = trafilatura.extract(
         html,
         url=url,
@@ -136,7 +140,7 @@ def _extract(html: str, url: str) -> Page:
             "It may be a login wall, a JavaScript-only app, or a non-article page."
         )
     keywords = extract_keywords(title, markdown)
-    return Page(url=url, title=title, markdown=markdown, keywords=keywords)
+    return Page(url=url, title=title, markdown=markdown, keywords=keywords, date=date)
 
 
 async def _try_direct(url: str, headers: dict, via: str) -> tuple[Page | None, Exception | None]:

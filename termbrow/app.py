@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import textwrap
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import httpx
 from textual import work
@@ -274,6 +274,15 @@ class TermBrow(App):
         self.query_one("#addrbar", Input).value = tab.page_url
         self.sub_title = tab.page_title[:60] if tab.page_title else "reading browser"
 
+    @staticmethod
+    def _inject_meta(md: str, meta_line: str) -> str:
+        """Place a small meta line (e.g. a date) just under the article's H1."""
+        if md.startswith("# "):
+            nl = md.find("\n")
+            if nl != -1:
+                return f"{md[:nl + 1]}\n{meta_line}\n{md[nl + 1:]}"
+        return f"{meta_line}\n\n{md}"
+
     def _set_loading(self, tab: ReaderTab, on: bool) -> None:
         # Textual's built-in loading overlay: an animated spinner over the
         # reading pane. Immediate, tactile acknowledgement that a click landed.
@@ -418,9 +427,13 @@ class TermBrow(App):
             self._status("Type your city or region, then Enter.")
         elif name == "search":
             params = parse_qs(query)
-            q = unquote((params.get("q") or [""])[0])
+            q = (params.get("q") or [""])[0]  # parse_qs already URL-decodes
+            try:
+                page = int((params.get("page") or ["0"])[0])
+            except ValueError:
+                page = 0
             if q:
-                self.run_search(q)
+                self.run_search(q, page=page)
         else:
             self._status(f"Unknown action: {href}")
 
@@ -507,6 +520,15 @@ class TermBrow(App):
         tab.view = "article"
 
         body = page.markdown
+        # Give the reader temporal context: show a publication date under the
+        # headline when the page exposes one, and note archived/Tor sources.
+        meta_bits = []
+        if page.date:
+            meta_bits.append(f"Published {page.date}")
+        if page.via == "wayback":
+            meta_bits.append("archived copy (Wayback)")
+        if meta_bits:
+            body = self._inject_meta(body, "*" + "  ·  ".join(meta_bits) + "*")
         if page.via == "tor":
             body = (
                 "> 🧅 **Onion service, loaded over Tor.** Read-only view — no "
@@ -574,25 +596,33 @@ class TermBrow(App):
 
     # ---------------------------------------------------------------- search
     @work(exclusive=True, group="search")
-    async def run_search(self, query: str) -> None:
+    async def run_search(self, query: str, page: int = 0) -> None:
         tab = self.active_tab()
         self._set_loading(tab, True)
-        self._status(f"Searching  “{query}”")
+        self._status(f"Searching  “{query}”" + (f"  (page {page + 1})" if page else ""))
         try:
-            results = await curate.search(query)
+            results = await curate.search(query, page=page)
         except Exception as exc:
             self._set_loading(tab, False)
             self._show_error(tab, f"search: {query}", str(exc))
             return
         finally:
             self._set_loading(tab, False)
+
+        def nav_link(label: str, p: int) -> str:
+            return f"[{label}](termbrow:search?q={quote_plus(query)}&page={p})"
+
         if not results:
-            await tab.article.update(
-                f"# No results for “{query}”\n\nTry different or broader terms."
-            )
-            self._status("No results.")
+            body = [f"# Search — “{query}”  ·  page {page + 1}", ""]
+            body.append("No more results." if page else "No results. Try different or broader terms.")
+            if page:
+                body += ["", nav_link("← Previous page", page - 1)]
+            await tab.article.update("\n".join(body))
+            self._status("No more results." if page else "No results.")
+            self._finish_search_view(tab, query)
             return
-        lines = [f"# Search — “{query}”", ""]
+
+        lines = [f"# Search — “{query}”  ·  page {page + 1}", ""]
         if any(a.onion for a in results):
             lines.append(
                 "> 🧅 = Tor onion result (via Ahmia, abuse-filtered but "
@@ -600,19 +630,33 @@ class TermBrow(App):
                 "here — but verify any onion address before trusting it, and "
                 "never send credentials or crypto.\n"
             )
-        for i, a in enumerate(results, 1):
+        base = page * 15
+        for i, a in enumerate(results, base + 1):
+            meta = f"*{a.source}*"
+            if a.date:
+                meta += f"  ·  {a.date}"
             if a.onion:
                 lines.append(f"{i}. 🧅 [{a.title}]({a.url})  ·  *onion — unverified*")
             else:
-                lines.append(f"{i}. [{a.title}]({a.url})  ·  *{a.source}*")
+                lines.append(f"{i}. [{a.title}]({a.url})  ·  {meta}")
+
+        nav = []
+        if page > 0:
+            nav.append(nav_link("← Previous", page - 1))
+        nav.append(nav_link("Next →", page + 1))
+        lines += ["", "  ·  ".join(nav)]
+
+        await tab.article.update("\n".join(lines))
+        self._finish_search_view(tab, query)
+        self._status(f"{len(results)} results for “{query}” (page {page + 1}).")
+
+    def _finish_search_view(self, tab: ReaderTab, query: str) -> None:
         tab.view = "search"
         tab.page_url = ""
         tab.page_title = f"Search: {query}"
-        await tab.article.update("\n".join(lines))
         tab.scroller.scroll_home(animate=False)
         self._set_tab_label(tab, f"⌕ {query}")
         self._sync_chrome(tab)
-        self._status(f"{len(results)} results for “{query}”.")
 
     # -------------------------------------------------------- library/history
     @work(exclusive=True, group="search")

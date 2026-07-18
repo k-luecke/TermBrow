@@ -94,7 +94,10 @@ Requires Python 3.9+.
   (see [Logging in](#logging-in) below).
 - **Read anything** — type a URL in the top bar, Enter. The page loads ad-free.
 - **Search / research** — type words instead of a URL to get a clickable results
-  list (Hacker News full-text + Wikipedia).
+  list (Hacker News full-text + Wikipedia, plus Tor onion results when connected).
+  Each result shows its **date** (posted/edited), and **← Previous / Next →**
+  links page through more results. Opened articles show their **publication
+  date** under the headline when the page exposes one.
 - **Click links** — every link in the reading pane and every *For You* chip is
   clickable and loads in place (or in a new tab — see below).
 - **Save what you like** — press `Ctrl+S` while reading to add an article to your
