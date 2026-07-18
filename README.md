@@ -1,2 +1,146 @@
-# TerrmBrow
-A terminal based browser that filters out ads and curruates content for leisurly reading, importaznt scientific break throughs, and practical local to national politcal coverage 
+# TermBrow
+
+A **clickable, ad-free terminal browser** built for reading and research.
+
+TermBrow fetches any page, strips it down to the article — no ads, no nav, no
+popups — and renders it as a clean, fixed-width reading column with **clickable
+links**. A *For You* strip at the top curates what to read next from your own
+reading history, the way a news carousel does, but from ad-free, direct
+publisher sources.
+
+## Why it looks the way it does
+
+The layout is deliberately monotonous: one accent color, one column width, the
+same chrome in the same place on every page. Holding the visual context stable
+from page to page reduces the contextual shifts that tax working memory — so
+attention stays on the material, not on re-orienting to each new layout.
+
+## Install & run
+
+**Recommended — one line, then a real `termbrow` command** (needs
+[pipx](https://pipx.pypa.io); `python -m pip install --user pipx` if you don't
+have it). pipx installs TermBrow into its own isolated environment:
+
+```bash
+pipx install git+https://github.com/k-luecke/TerrmBrow
+termbrow
+```
+
+To update later: `pipx upgrade termbrow`. To remove: `pipx uninstall termbrow`.
+
+<details>
+<summary>Alternatives (plain pip, or run from a clone)</summary>
+
+```bash
+# Plain pip — into the current environment (a venv is recommended)
+pip install git+https://github.com/k-luecke/TerrmBrow
+termbrow
+
+# From a clone, for development
+git clone https://github.com/k-luecke/TerrmBrow
+cd TerrmBrow
+pip install -e .        # editable install; then run `termbrow`
+```
+
+On Windows without pipx, the bundled `run.ps1` sets up a local `.venv` and
+launches the app in one step: `./run.ps1`
+</details>
+
+Requires Python 3.9+.
+
+## Using it
+
+- **Read anything** — type a URL in the top bar, Enter. The page loads ad-free.
+- **Search / research** — type words instead of a URL to get a clickable results
+  list (Hacker News full-text + Wikipedia).
+- **Click links** — every link in the reading pane and every *For You* chip is
+  clickable and loads in place (or in a new tab — see below).
+- **Save what you like** — press `Ctrl+S` while reading to add an article to your
+  **Library**; open the library any time with `Ctrl+Y`. `Ctrl+S` again removes it.
+- **Tabs** — `Ctrl+T` opens a new tab, `Ctrl+W` closes one, `Ctrl+PgUp`/`PgDn`
+  switch. Toggle `Ctrl+N` to make links open in a **new background tab** so a
+  tangent never costs you the page you were on. Each tab keeps its own history.
+- **For You** — the top strip learns from what you read. The more you read, the
+  more it follows your current topics; with no history it shows trending items.
+- **Explore mode** — press `Ctrl+E` to cycle **Focus → Balanced → Discover**.
+  This is the dial between more-of-the-same and novel discovery (see below).
+
+### Explore mode — discovery without pigeonholing
+
+The problem with attention-metric feeds is they collapse onto whatever you
+clicked first. TermBrow's answer is **serendipity within reach**: every feed
+reserves a budget for *discovery*, but discoveries are **anchored one hop from
+what you already read**, so they're new without being random.
+
+Discoveries (marked `◇`, in a quieter tint) come from three anchored sources:
+
+- **Neighbors** — adjacent topics drawn from the Wikipedia page of one of your
+  interests (genuinely related, but a step outward).
+- **Cross-pollination** — the *intersection* of two of your interests, surfacing
+  things that sit between them.
+- **A small wildcard** — one or two purely trending items for outside air.
+
+The `Ctrl+E` dial sets how much of the feed is discovery — **Focus** ~15%,
+**Balanced** ~40%, **Discover** ~65%. Discovery is strictly capped at that
+budget, so a low setting genuinely means little novelty — the dial is honest.
+
+It learns from *engagement, not just clicks*: reading a discovery graduates its
+topic into your interests; ignoring it costs nothing. Interest weights also
+**decay** over time, so the feed follows recent attention instead of ossifying —
+and a source-diversity cap keeps any single site from dominating the strip.
+
+### Keys
+
+| Key | Action |
+| --- | --- |
+| `Ctrl+L` | Jump to the address/search bar |
+| `Ctrl+B` | Back (within the current tab) |
+| `Ctrl+S` | Save / unsave the current article to the Library |
+| `Ctrl+Y` | Open the Library |
+| `Ctrl+T` | New tab |
+| `Ctrl+W` | Close tab |
+| `Ctrl+PgDn` / `Ctrl+PgUp` | Next / previous tab |
+| `Ctrl+N` | Toggle: links open in a new background tab |
+| `Ctrl+E` | Cycle explore mode (Focus / Balanced / Discover) |
+| `Ctrl+R` | Refresh the *For You* feed |
+| `Ctrl+G` | Show/hide the feed strip |
+| `Ctrl+D` | Toggle light/dark |
+| `Esc`    | Return focus to the reader |
+| `Ctrl+Q` | Quit |
+
+## How the ad-free / curation parts work
+
+- **Ad & clutter removal** — [trafilatura](https://trafilatura.readthedocs.io)
+  extracts just the article body (dropping nav, sidebars, promos, comments), and
+  a second pass defuses any surviving links that point at known ad/tracker hosts
+  so a stray click can never land on an ad.
+- **Curation** uses only keyless sources that return *real publisher URLs* you
+  can actually open ad-free: Hacker News (Algolia) full-text search + front
+  page, the Wikipedia search API, and a few reputable RSS feeds for trending.
+  Google News is intentionally avoided — its RSS links are opaque redirects that
+  can't be opened directly.
+- **Loading "unreadable" sites** — if a direct fetch comes back blocked or
+  empty (bot walls, JavaScript-only pages, dead links), TermBrow escalates
+  automatically: first it retries with a full desktop-browser fingerprint, then
+  it falls back to the **Wayback Machine's** latest static snapshot (which is
+  often readable even when the live site isn't). The status bar shows
+  `(via wayback)` when a page came from the archive. The Wayback fallback is the
+  only time a URL you visit is sent to a third party (archive.org), and only
+  after a direct read has failed.
+- **Your data stays local** — reading history, topic weights, and your saved
+  **Library** live in `~/.termbrow/` as plain, inspectable JSON
+  (`history.json`, `keywords.json`, `library.json`). Delete any of them to reset.
+
+## Layout
+
+```
+termbrow/
+  app.py      # Textual TUI: tabs, theme, navigation, library, wiring
+  fetch.py    # fetch chain (direct → browser headers → Wayback) + ad-strip
+  curate.py   # search + For You feed with explore/exploit (HN, Wikipedia, RSS)
+  store.py    # local reading history, decaying topic weights, saved library
+```
+
+## License
+
+[Mozilla Public License 2.0](LICENSE).
