@@ -27,9 +27,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/k-luecke/TerrmBrow"
-Repository = "https://github.com/k-luecke/TerrmBrow"
-Issues = "https://github.com/k-luecke/TerrmBrow/issues"
+Homepage = "https://github.com/k-luecke/TermBrow"
+Repository = "https://github.com/k-luecke/TermBrow"
+Issues = "https://github.com/k-luecke/TermBrow/issues"
 
 # This is the whole point of packaging: after install, users just run `termbrow`.
 [project.scripts]

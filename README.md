@@ -30,7 +30,7 @@ attention stays on the material, not on re-orienting to each new layout.
 have it). pipx installs TermBrow into its own isolated environment:
 
 ```bash
-pipx install git+https://github.com/k-luecke/TerrmBrow
+pipx install git+https://github.com/k-luecke/TermBrow
 termbrow
 ```
 
@@ -41,12 +41,12 @@ To update later: `pipx upgrade termbrow`. To remove: `pipx uninstall termbrow`.
 
 ```bash
 # Plain pip — into the current environment (a venv is recommended)
-pip install git+https://github.com/k-luecke/TerrmBrow
+pip install git+https://github.com/k-luecke/TermBrow
 termbrow
 
 # From a clone, for development
-git clone https://github.com/k-luecke/TerrmBrow
-cd TerrmBrow
+git clone https://github.com/k-luecke/TermBrow
+cd TermBrow
 pip install -e .        # editable install; then run `termbrow`
 ```
 
