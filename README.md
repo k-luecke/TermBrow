@@ -88,7 +88,9 @@ Requires Python 3.9+.
   `:area <your city>` to get civic facts and local topics; nothing here is an
   ad or an outrage feed.
 - **Commands** — type these in the address bar: `:home`, `:history`,
-  `:library`, `:area <place>`.
+  `:library`, `:area <place>`, `:login`, `:logout`, `:cookies`, `:help login`.
+- **Read sites you're logged into** — TermBrow can use your browser's session
+  (see [Logging in](#logging-in) below).
 - **Read anything** — type a URL in the top bar, Enter. The page loads ad-free.
 - **Search / research** — type words instead of a URL to get a clickable results
   list (Hacker News full-text + Wikipedia).
@@ -148,6 +150,30 @@ and a source-diversity cap keeps any single site from dominating the strip.
 | `Esc`    | Return focus to the reader |
 | `Ctrl+Q` | Quit |
 
+## Logging in
+
+TermBrow fetches with plain HTTP (no browser engine), so to open a page behind a
+login it borrows the **session cookies** your real browser already holds. Your
+data stays local — cookies are saved only in `~/.termbrow/cookies.json`, never
+uploaded.
+
+**Easiest — `cookies.txt` (any browser):**
+
+1. Install a cookie-export extension — *Get cookies.txt LOCALLY* (Chrome/Edge)
+   or *cookies.txt* (Firefox).
+2. Log in to the site in your browser, then export a `cookies.txt` for it.
+3. In TermBrow, open that site and run `:login C:\path\to\cookies.txt`. The page
+   reloads using your session — ad-free.
+
+**Automatic (`:login` with no argument):** works for Firefox and unlocked cookie
+stores. Modern **Chrome/Edge on Windows encrypt their cookies** ("app-bound
+encryption"), which blocks automatic reading — use the `cookies.txt` method
+there. Run `:help login` in the app for the same guide.
+
+Manage sessions with `:cookies` (list) and `:logout` (forget the current site).
+For sites that need JavaScript or interactive login, `Ctrl+O` still opens the
+page in your real browser.
+
 ## How the ad-free / curation parts work
 
 - **Ad & clutter removal** — [trafilatura](https://trafilatura.readthedocs.io)
@@ -184,6 +210,7 @@ termbrow/
   home.py     # constructive home page (Wikipedia featured, learn, civic, library)
   fetch.py    # fetch chain (direct → browser headers → Wayback) + ad-strip
   curate.py   # search + For You feed with explore/exploit (HN, Wikipedia, RSS)
+  cookies.py  # session import (browser_cookie3 + cookies.txt) for logged-in reads
   store.py    # local history, topic weights, saved library, preferences
 ```
 

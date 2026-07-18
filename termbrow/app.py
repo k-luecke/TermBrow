@@ -13,6 +13,7 @@ just means you rarely need the mouse.
 """
 from __future__ import annotations
 
+import asyncio
 import textwrap
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -24,8 +25,36 @@ from textual.widgets import (
     Button, Footer, Header, Input, Markdown, Static, TabbedContent, TabPane,
 )
 
-from . import curate, home, store
+from . import cookies, curate, home, store
 from .fetch import Page, fetch_page
+
+LOGIN_HELP = """\
+# Logging in to a site
+
+TermBrow reads pages with plain HTTP (no browser engine), so to open something
+behind a login it needs the **session cookies** your real browser already holds.
+
+## Easiest — works with any browser (`cookies.txt`)
+
+1. Install a cookies-export extension, e.g. **Get cookies.txt LOCALLY**
+   (Chrome/Edge) or **cookies.txt** (Firefox).
+2. Log in to the site in your browser, then click the extension to export a
+   `cookies.txt` for the current site.
+3. In TermBrow, open that site, then run:  `:login C:\\path\\to\\cookies.txt`
+4. TermBrow reloads the page using your session — ad-free.
+
+## Automatic — Firefox or unlocked browsers
+
+Just run `:login` while on the site. Modern Chrome/Edge on Windows encrypt their
+cookie store, which blocks automatic reading; use the `cookies.txt` method above.
+
+## Managing sessions
+
+- `:logout` — forget the current site's cookies
+- `:cookies` — list sites you have a saved session for
+
+Cookies live locally in `~/.termbrow/cookies.json` and are never uploaded.\
+"""
 
 # Brief placeholder shown for the instant before the home page finishes loading.
 PLACEHOLDER = "# TermBrow\n\n*Loading your home page…*"
@@ -266,8 +295,22 @@ class TermBrow(App):
                 self.go_home()
             else:
                 self._status("Usage: :area <your city or region>")
+        elif name == "login":
+            self.do_login(rest)
+        elif name == "logout":
+            self.do_logout()
+        elif name == "cookies":
+            self.show_cookies()
+        elif name == "help" and rest.lower() == "login":
+            self.run_worker(
+                self._render_view(self.active_tab(), "help", "Login help",
+                                  "? Login", LOGIN_HELP),
+                group="render", exclusive=False,
+            )
         else:
-            self._status(f"Unknown command “:{cmd}”. Try :home, :history, :area <place>.")
+            self._status(
+                f"Unknown command “:{cmd}”. Try :home, :history, :login, :area <place>."
+            )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button = event.button
@@ -511,6 +554,62 @@ class TermBrow(App):
             md = "\n".join(lines)
         await self._render_view(tab, "history", "History", "⏱ History", md)
         self._status(f"History: {len(recent)} page(s).")
+
+    # ------------------------------------------------------------- sessions
+    @work(exclusive=True, group="cookies")
+    async def do_login(self, arg: str) -> None:
+        tab = self.active_tab()
+        host = (urlparse(tab.page_url or tab.last_url).hostname or "").lower()
+        if arg:
+            path = arg.strip().strip('"').strip("'")
+            self._status(f"Importing cookies from {path}…")
+            count, err = await asyncio.to_thread(
+                cookies.import_cookies_txt, path, host or None
+            )
+        else:
+            if not host:
+                self._status("Open the site first, then :login  (or :login <cookies.txt>)")
+                return
+            self._status(f"Reading {host} session from your browser…")
+            count, _browser, err = await asyncio.to_thread(
+                cookies.import_from_browser, host
+            )
+        if count:
+            self._status(f"✓ Imported {count} cookies. Reloading with your session…")
+            target = tab.page_url or tab.last_url
+            if target:
+                self.load_url(target, new_tab=False)
+        else:
+            self._status(f"Login import failed — {err}")
+            # Surface the how-to so the fix is one screen away.
+            await self._render_view(tab, "help", "Login help", "? Login", LOGIN_HELP)
+
+    def do_logout(self) -> None:
+        tab = self.active_tab()
+        host = (urlparse(tab.page_url or tab.last_url).hostname or "").lower()
+        if not host:
+            self._status("Open the site first, then :logout")
+            return
+        cookies.clear(host)
+        self._status(f"Forgot the saved session for {host}.")
+
+    @work(exclusive=True, group="search")
+    async def show_cookies(self) -> None:
+        tab = self.active_tab()
+        saved = cookies.domains()
+        if not saved:
+            md = (
+                "# Saved sessions\n\nNone yet. Run `:login` while on a site "
+                "(or `:login <cookies.txt>`) to read pages you're logged into. "
+                "See `:help login`."
+            )
+        else:
+            lines = ["# Saved sessions", ""]
+            for dom, n in sorted(saved):
+                lines.append(f"- **{dom}** — {n} cookie(s)")
+            lines.append("\n*`:logout` on a site forgets its cookies.*")
+            md = "\n".join(lines)
+        await self._render_view(tab, "cookies", "Saved sessions", "🔑 Sessions", md)
 
     async def _render_view(
         self, tab: ReaderTab, view: str, title: str, label: str, md: str

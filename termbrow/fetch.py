@@ -16,6 +16,8 @@ from urllib.parse import urlparse
 import httpx
 import trafilatura
 
+from . import cookies
+
 # A descriptive UA + Accept headers. Several large sites (Wikipedia among them)
 # 403 a bare "Mozilla" string; this identifies the client honestly and works.
 HEADERS = {
@@ -140,8 +142,11 @@ def _extract(html: str, url: str) -> Page:
 async def _try_direct(url: str, headers: dict, via: str) -> tuple[Page | None, Exception | None]:
     """One direct fetch+extract attempt. Returns (page_or_None, error_or_None)."""
     try:
+        # Send any session cookies the reader imported for this domain, so
+        # pages behind a login load just like they would in their browser.
+        jar = cookies.cookies_for_url(url)
         async with httpx.AsyncClient(
-            headers=headers, follow_redirects=True, timeout=15.0
+            headers=headers, follow_redirects=True, timeout=15.0, cookies=jar or None
         ) as client:
             resp = await client.get(url)
             resp.raise_for_status()
