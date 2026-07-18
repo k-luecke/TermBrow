@@ -62,7 +62,11 @@ class ReaderTab(TabPane):
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="reader"):
             with Center():
-                yield Markdown(PLACEHOLDER, classes="article")
+                # open_links=False is essential: otherwise Textual's Markdown
+                # auto-opens every link in the system browser (a stray Chrome
+                # window) and races our own in-app navigation. We handle all
+                # link clicks ourselves via on_markdown_link_clicked.
+                yield Markdown(PLACEHOLDER, classes="article", open_links=False)
 
     @property
     def article(self) -> Markdown:
@@ -86,7 +90,8 @@ class TermBrow(App):
         width: 5; min-width: 5; height: 3; margin: 0 1 0 0;
         border: round $accent 30%; background: $surface; color: $text;
     }
-    .navbtn:hover { border: round $accent; color: $accent; }
+    .navbtn:hover { border: round $accent; color: $accent; background: $boost; }
+    .navbtn:focus { border: round $accent; }
     #addrbar {
         width: 1fr; height: 3;
         border: round $accent 40%; background: $surface;
@@ -102,9 +107,9 @@ class TermBrow(App):
         border: round $primary 40%; background: $surface;
         color: $text; text-align: left;
     }
-    .feed-item:hover { border: round $accent; }
+    .feed-item:hover { border: round $accent; background: $boost; }
     .feed-item.discover { border: round $secondary 50%; color: $text-muted; }
-    .feed-item.discover:hover { border: round $secondary; }
+    .feed-item.discover:hover { border: round $secondary; background: $boost; }
 
     /* Reading column: fixed width, centered, so line length never shifts. */
     #tabs { height: 1fr; }
@@ -199,6 +204,14 @@ class TermBrow(App):
     def _sync_chrome(self, tab: ReaderTab) -> None:
         self.query_one("#addrbar", Input).value = tab.page_url
         self.sub_title = tab.page_title[:60] if tab.page_title else "reading browser"
+
+    def _set_loading(self, tab: ReaderTab, on: bool) -> None:
+        # Textual's built-in loading overlay: an animated spinner over the
+        # reading pane. Immediate, tactile acknowledgement that a click landed.
+        try:
+            tab.scroller.loading = on
+        except Exception:
+            pass
 
     def _looks_like_url(self, text: str) -> bool:
         text = text.strip()
@@ -303,6 +316,7 @@ class TermBrow(App):
 
     async def _go_home(self, tab: ReaderTab | None) -> None:
         tab = tab or self.active_tab()
+        self._set_loading(tab, True)
         self._status("Loading home…")
         try:
             md = await home.build_homepage(
@@ -310,6 +324,8 @@ class TermBrow(App):
             )
         except Exception as exc:
             md = f"# TermBrow\n\nCouldn't build the home page: {exc}"
+        finally:
+            self._set_loading(tab, False)
         tab.view = "home"
         tab.page_url = ""
         tab.page_title = "Home"
@@ -334,19 +350,27 @@ class TermBrow(App):
             url = "https://" + url
 
         if new_tab:
-            tab = await self._new_tab("Loading…", activate=False)
+            tab = await self._new_tab("⟳ Loading…", activate=False)
         else:
             tab = self.active_tab()
+            self._set_tab_label(tab, "⟳ Loading…")
 
+        self._set_loading(tab, True)
         self._status(f"Loading  {url}")
         try:
             page: Page = await fetch_page(url)
         except httpx.HTTPStatusError as exc:
+            self._set_loading(tab, False)
+            self._set_tab_label(tab, tab.page_title or "Untitled")
             self._show_error(tab, url, f"HTTP {exc.response.status_code}")
             return
         except Exception as exc:
+            self._set_loading(tab, False)
+            self._set_tab_label(tab, tab.page_title or "Untitled")
             self._show_error(tab, url, str(exc) or exc.__class__.__name__)
             return
+        finally:
+            self._set_loading(tab, False)
 
         if push and (not tab.nav or tab.nav[-1] != page.url):
             tab.nav.append(page.url)
@@ -388,12 +412,16 @@ class TermBrow(App):
     @work(exclusive=True, group="search")
     async def run_search(self, query: str) -> None:
         tab = self.active_tab()
+        self._set_loading(tab, True)
         self._status(f"Searching  “{query}”")
         try:
             results = await curate.search(query)
         except Exception as exc:
+            self._set_loading(tab, False)
             self._show_error(tab, f"search: {query}", str(exc))
             return
+        finally:
+            self._set_loading(tab, False)
         if not results:
             await tab.article.update(
                 f"# No results for “{query}”\n\nTry different or broader terms."

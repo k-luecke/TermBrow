@@ -141,7 +141,7 @@ async def _try_direct(url: str, headers: dict, via: str) -> tuple[Page | None, E
     """One direct fetch+extract attempt. Returns (page_or_None, error_or_None)."""
     try:
         async with httpx.AsyncClient(
-            headers=headers, follow_redirects=True, timeout=25.0
+            headers=headers, follow_redirects=True, timeout=15.0
         ) as client:
             resp = await client.get(url)
             resp.raise_for_status()
@@ -162,7 +162,7 @@ async def _try_wayback(url: str) -> Page | None:
     """
     try:
         async with httpx.AsyncClient(
-            headers=HEADERS, follow_redirects=True, timeout=30.0
+            headers=HEADERS, follow_redirects=True, timeout=20.0
         ) as client:
             avail = await client.get(
                 "https://archive.org/wayback/available", params={"url": url}
