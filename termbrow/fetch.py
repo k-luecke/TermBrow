@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import httpx
 import trafilatura
 
-from . import cookies
+from . import cookies, tor
 
 # A descriptive UA + Accept headers. Several large sites (Wikipedia among them)
 # 403 a bare "Mozilla" string; this identifies the client honestly and works.
@@ -189,14 +189,38 @@ async def _try_wayback(url: str) -> Page | None:
         return None
 
 
+async def _try_onion(url: str, proxy: str) -> Page:
+    """Fetch an .onion page through the Tor SOCKS proxy. Tor is slow, so the
+    timeout is generous; there is no Wayback/clearnet fallback for onions."""
+    async with httpx.AsyncClient(
+        headers=HEADERS, follow_redirects=True, timeout=60.0, proxy=proxy
+    ) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        final_url, html = str(resp.url), resp.text
+    page = await asyncio.to_thread(_extract, html, final_url)
+    page.via = "tor"
+    return page
+
+
 async def fetch_page(url: str) -> Page:
     """Fetch `url` as clean reading Markdown, escalating through fallbacks.
 
     Strategy: honest direct fetch → full-browser headers → Wayback snapshot.
+    .onion addresses go straight through the Tor proxy instead.
     Raises only if every strategy fails to produce any content at all.
     """
     if not urlparse(url).scheme:
-        url = "https://" + url
+        url = ("http://" if tor.is_onion(url) else "https://") + url
+
+    # Onion services are only reachable over Tor — never leak them to clearnet.
+    if tor.is_onion(url):
+        proxy = tor.proxy_socks_url()
+        if not proxy:
+            raise tor.TorNotConnected(
+                "This is a Tor onion address, but no Tor proxy is connected."
+            )
+        return await _try_onion(url, proxy)
 
     best: Page | None = None
     first_error: Exception | None = None

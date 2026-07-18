@@ -88,7 +88,8 @@ Requires Python 3.9+.
   `:area <your city>` to get civic facts and local topics; nothing here is an
   ad or an outrage feed.
 - **Commands** — type these in the address bar: `:home`, `:history`,
-  `:library`, `:area <place>`, `:login`, `:logout`, `:cookies`, `:help login`.
+  `:library`, `:area <place>`, `:login`, `:logout`, `:cookies`, `:tor`,
+  `:help login`, `:help onion`.
 - **Read sites you're logged into** — TermBrow can use your browser's session
   (see [Logging in](#logging-in) below).
 - **Read anything** — type a URL in the top bar, Enter. The page loads ad-free.
@@ -174,6 +175,29 @@ Manage sessions with `:cookies` (list) and `:logout` (forget the current site).
 For sites that need JavaScript or interactive login, `Ctrl+O` still opens the
 page in your real browser.
 
+## Tor / onion services
+
+TermBrow can open `.onion` links and fold onion results into search, for reading
+research and reporting that's censored or otherwise unavailable. It does **not**
+run Tor or a VM itself — it routes through an existing **Tor SOCKS proxy**:
+
+- **Tor Browser** — just launch it; auto-detected on port 9150.
+- **A `tor` service** — auto-detected on port 9050.
+- **Whonix Gateway** — point TermBrow at it: `:tor 10.152.152.10:9050` (your
+  gateway's address). You get Whonix's full stream-isolation and leak
+  protection, with TermBrow as a thin read-only client — the right way to get
+  "Whonix integration" without bundling a VM.
+
+Commands: `:tor` (status) · `:tor host:port` (set) · `:tor off` / `:tor auto` ·
+`:help onion` (setup + safety). Onion requests use `socks5h` so Tor — not your
+machine — resolves the address, and onion links never leak to the clearnet.
+
+**Avoiding scams:** TermBrow is **read-only** (no forms, logins, or crypto), so
+you can't be phished or pay a scammer *through it*. Onion search uses
+[Ahmia](https://ahmia.fi), which filters abuse material — but results are still
+**unverified and tagged 🧅**; confirm any onion address against the service's
+official clearnet site before trusting it. Use Tor for reading, not marketplaces.
+
 ## How the ad-free / curation parts work
 
 - **Ad & clutter removal** — [trafilatura](https://trafilatura.readthedocs.io)
@@ -211,6 +235,7 @@ termbrow/
   fetch.py    # fetch chain (direct → browser headers → Wayback) + ad-strip
   curate.py   # search + For You feed with explore/exploit (HN, Wikipedia, RSS)
   cookies.py  # session import (browser_cookie3 + cookies.txt) for logged-in reads
+  tor.py      # Tor SOCKS proxy detection/config for .onion access (+ Whonix)
   store.py    # local history, topic weights, saved library, preferences
 ```
 

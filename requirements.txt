@@ -1,5 +1,5 @@
 textual>=8.0
-httpx>=0.27
+httpx[socks]>=0.27
 trafilatura>=2.0
 feedparser>=6.0
 browser_cookie3>=0.19

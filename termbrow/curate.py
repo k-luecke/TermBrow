@@ -17,13 +17,19 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 from dataclasses import dataclass
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, unquote, urlparse
 
 import feedparser
 import httpx
 
+from . import tor
 from .fetch import HEADERS
+
+# Ahmia's onion search service (abuse-filtered). Reached through Tor; the
+# clearnet site is JavaScript-gated, so we query the onion when Tor is up.
+_AHMIA_ONION = "juhanurmihxlp77nkq76byazcldy2hlmovfu2epvl5ankdibsot4csyd.onion"
 
 # Wikimedia's API enforces a stricter User-Agent policy than its page endpoint:
 # it wants an app name + contact. Bare "Mozilla" strings get 403'd here.
@@ -49,6 +55,7 @@ class Article:
     # "foryou"  = anchored in the reader's known interests (exploit)
     # "discover" = anchored-but-novel, surfaced by explore mode
     kind: str = "foryou"
+    onion: bool = False               # a Tor .onion result (needs verification)
 
 
 def _host(url: str) -> str:
@@ -192,13 +199,52 @@ def _gather(backends) -> list[Article]:
     return results
 
 
+def _onion_search(query: str, limit: int) -> list[Article]:
+    """Best-effort onion results via Ahmia, only when Tor is connected.
+
+    Ahmia filters abuse material, which reduces (not eliminates) the worst of
+    the darkweb. Results are still *unverified* — the UI flags them as such.
+    """
+    proxy = tor.proxy_socks_url()
+    if not proxy:
+        return []
+    url = f"http://{_AHMIA_ONION}/search/?q={quote_plus(query)}"
+    try:
+        r = httpx.get(url, headers=HEADERS, timeout=45, proxy=proxy, follow_redirects=True)
+        html = r.text
+    except Exception:
+        return []
+    out: list[Article] = []
+    seen: set[str] = set()
+    # Ahmia links results through /search/redirect?...&redirect_url=<onion>
+    for m in re.finditer(
+        r'redirect_url=([^"&]+)"[^>]*>\s*(?:<[^>]+>\s*)*([^<]{3,140})', html
+    ):
+        link = unquote(m.group(1)).strip()
+        title = re.sub(r"\s+", " ", m.group(2)).strip()
+        host = urlparse(link).hostname or ""
+        if not host.endswith(".onion") or link in seen:
+            continue
+        seen.add(link)
+        out.append(Article(title=title or host, url=link, source="onion", onion=True))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _search_sync(query: str, limit: int) -> list[Article]:
     per = max(4, limit)
-    articles = _gather([
+    articles = _dedupe(_gather([
         lambda: _hn_search(query, per),
         lambda: _wiki_search(query, 3),
-    ])
-    return _dedupe(articles, limit)
+    ]), limit)
+    onions = _onion_search(query, 5)
+    if not onions:
+        return articles
+    # Keep room for onion results (the reader asked for them mixed in), then
+    # append them clearly at the end so clearnet stays first.
+    keep = max(0, limit - len(onions))
+    return articles[:keep] + onions
 
 
 def _take(candidates, n, seen, host_counts, max_per_host=2):

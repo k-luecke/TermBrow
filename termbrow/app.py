@@ -25,8 +25,38 @@ from textual.widgets import (
     Button, Footer, Header, Input, Markdown, Static, TabbedContent, TabPane,
 )
 
-from . import cookies, curate, home, store
+from . import cookies, curate, home, store, tor
 from .fetch import Page, fetch_page
+
+ONION_HELP = """\
+# Reading Tor onion (.onion) services
+
+TermBrow can open `.onion` links and fold onion results into search — but it
+needs a **Tor proxy** to route through. It never runs Tor itself.
+
+## Connect Tor (pick one)
+
+- **Tor Browser** — just launch it; TermBrow auto-detects it on port 9150.
+- **A `tor` service** — auto-detected on port 9050.
+- **Whonix Gateway** — run TermBrow in the Workstation, or point at the gateway:
+  `:tor 10.152.152.10:9050` (use your gateway's address). This gives Whonix's
+  full stream-isolation and leak protection, with TermBrow as a read-only client.
+
+Check status with `:tor`. Force a proxy with `:tor host:port`, disable with
+`:tor off`, re-enable auto-detect with `:tor auto`.
+
+## Staying safe
+
+- TermBrow is **read-only** — no forms, no logins, no crypto — so you can't be
+  phished or pay a scammer *through it*.
+- Onion **search uses Ahmia**, which filters abuse material, but results are
+  still **unverified**. Treat every onion address as untrusted until you confirm
+  it against the service's official clearnet site.
+- Most "marketplaces" are scams. Use Tor for **reading** — research, journalism,
+  and reporting that's censored or otherwise unavailable. That's what this is for.
+
+Onion pages load slower (they route through several Tor relays) — that's normal.\
+"""
 
 LOGIN_HELP = """\
 # Logging in to a site
@@ -301,6 +331,14 @@ class TermBrow(App):
             self.do_logout()
         elif name == "cookies":
             self.show_cookies()
+        elif name == "tor":
+            self._cmd_tor(rest)
+        elif name in ("onion",) or (name == "help" and rest.lower() == "onion"):
+            self.run_worker(
+                self._render_view(self.active_tab(), "help", "Onion / Tor help",
+                                  "🧅 Onion", ONION_HELP),
+                group="render", exclusive=False,
+            )
         elif name == "help" and rest.lower() == "login":
             self.run_worker(
                 self._render_view(self.active_tab(), "help", "Login help",
@@ -309,8 +347,22 @@ class TermBrow(App):
             )
         else:
             self._status(
-                f"Unknown command “:{cmd}”. Try :home, :history, :login, :area <place>."
+                f"Unknown command “:{cmd}”. Try :home, :history, :login, :tor, :area <place>."
             )
+
+    def _cmd_tor(self, rest: str) -> None:
+        rest = rest.strip()
+        if rest.lower() == "off":
+            tor.set_proxy(None)
+        elif rest.lower() in ("auto", "on", ""):
+            if rest.lower() in ("auto", "on"):
+                tor.set_proxy("auto")
+        elif ":" in rest:
+            tor.set_proxy(rest)
+        else:
+            self._status("Usage: :tor  ·  :tor host:port  ·  :tor off  ·  :tor auto")
+            return
+        self._status(tor.status_line())
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button = event.button
@@ -352,6 +404,12 @@ class TermBrow(App):
                 self.load_url(target, new_tab=False)
         elif name == "external":
             self.action_open_external()
+        elif name == "onionhelp":
+            self.run_worker(
+                self._render_view(self.active_tab(), "help", "Onion / Tor help",
+                                  "🧅 Onion", ONION_HELP),
+                group="render", exclusive=False,
+            )
         elif name == "area":
             addr = self.query_one("#addrbar", Input)
             addr.focus()
@@ -417,10 +475,18 @@ class TermBrow(App):
             self._set_tab_label(tab, "⟳ Loading…")
 
         tab.last_url = url                 # remembered so Ctrl+O / retry can act
+        if tor.is_onion(url):
+            self._status(f"Loading onion over Tor (slower)…  {url[:50]}")
+        else:
+            self._status(f"Loading  {url}")
         self._set_loading(tab, True)
-        self._status(f"Loading  {url}")
         try:
             page: Page = await fetch_page(url)
+        except tor.TorNotConnected:
+            self._set_loading(tab, False)
+            self._set_tab_label(tab, tab.page_title or "Untitled")
+            self._show_onion_setup(tab, url)
+            return
         except httpx.HTTPStatusError as exc:
             self._set_loading(tab, False)
             self._set_tab_label(tab, tab.page_title or "Untitled")
@@ -440,7 +506,15 @@ class TermBrow(App):
         tab.page_title = page.title
         tab.view = "article"
 
-        await tab.article.update(page.markdown)
+        body = page.markdown
+        if page.via == "tor":
+            body = (
+                "> 🧅 **Onion service, loaded over Tor.** Read-only view — no "
+                "forms, logins, or crypto pass through TermBrow. Verify this "
+                "address via the service's official site before trusting it.\n\n"
+                "---\n\n" + body
+            )
+        await tab.article.update(body)
         tab.scroller.scroll_home(animate=False)
         self._set_tab_label(tab, page.title)
 
@@ -455,6 +529,23 @@ class TermBrow(App):
         store.record_visit(page.url, page.title)
         store.bump_keywords(page.keywords)
         self.refresh_feed()
+
+    def _show_onion_setup(self, tab: ReaderTab, url: str) -> None:
+        md = (
+            f"# Tor isn't connected\n\n"
+            f"**{url}** is a Tor onion address, but TermBrow can't reach a Tor "
+            f"proxy right now.\n\n"
+            f"> {tor.status_line()}\n\n"
+            "Start **Tor Browser** or a **Whonix Gateway**, then reload — or point "
+            "TermBrow at a proxy with `:tor host:port`.\n\n"
+            "- [↻ Retry](termbrow:reload)\n"
+            "- [How onion access works](termbrow:onionhelp)\n"
+            "- [Back](termbrow:back)  ·  [Home](termbrow:home)\n"
+        )
+        tab.view = "error"
+        tab.page_url = ""
+        self.run_worker(tab.article.update(md), group="render", exclusive=False)
+        self._status("Tor not connected — see :help onion")
 
     def _show_error(self, tab: ReaderTab, url: str, detail: str) -> None:
         hint = ""
@@ -502,8 +593,18 @@ class TermBrow(App):
             self._status("No results.")
             return
         lines = [f"# Search — “{query}”", ""]
+        if any(a.onion for a in results):
+            lines.append(
+                "> 🧅 = Tor onion result (via Ahmia, abuse-filtered but "
+                "**unverified**). TermBrow is read-only, so you can't be phished "
+                "here — but verify any onion address before trusting it, and "
+                "never send credentials or crypto.\n"
+            )
         for i, a in enumerate(results, 1):
-            lines.append(f"{i}. [{a.title}]({a.url})  ·  *{a.source}*")
+            if a.onion:
+                lines.append(f"{i}. 🧅 [{a.title}]({a.url})  ·  *onion — unverified*")
+            else:
+                lines.append(f"{i}. [{a.title}]({a.url})  ·  *{a.source}*")
         tab.view = "search"
         tab.page_url = ""
         tab.page_title = f"Search: {query}"
