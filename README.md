@@ -89,15 +89,18 @@ Requires Python 3.9+.
   ad or an outrage feed.
 - **Commands** — type these in the address bar: `:home`, `:history`,
   `:library`, `:area <place>`, `:login`, `:logout`, `:cookies`, `:tor`,
-  `:help login`, `:help onion`.
+  `:sort <newest|relevance>`, `:help login`, `:help onion`.
 - **Read sites you're logged into** — TermBrow can use your browser's session
   (see [Logging in](#logging-in) below).
 - **Read anything** — type a URL in the top bar, Enter. The page loads ad-free.
 - **Search / research** — type words instead of a URL to get a clickable results
-  list (Hacker News full-text + Wikipedia, plus Tor onion results when connected).
-  Each result shows its **date** (posted/edited), and **← Previous / Next →**
-  links page through more results. Opened articles show their **publication
-  date** under the headline when the page exposes one.
+  list drawn from **diverse world news** ([GDELT](https://gdeltproject.org),
+  direct publisher links), Hacker News full-text, and Wikipedia — plus Tor onion
+  results when connected. No single outlet can dominate: results are **capped at
+  two per domain**, so "recent news on X" gives a spread, not five of the same
+  paper. Each result shows its **date**; **`Ctrl+K`** toggles sort between *most
+  relevant* and *newest first*; **← Previous / Next →** page through more.
+  Opened articles show their **publication date** under the headline.
 - **Click links** — every link in the reading pane and every *For You* chip is
   clickable and loads in place (or in a new tab — see below).
 - **Save what you like** — press `Ctrl+S` while reading to add an article to your
@@ -141,6 +144,7 @@ and a source-diversity cap keeps any single site from dominating the strip.
 | `Ctrl+L` | Jump to the address/search bar |
 | `Ctrl+B` | Back (within the current tab) |
 | `Ctrl+H` | Open history |
+| `Ctrl+K` | Toggle search sort (relevant / newest) |
 | `Ctrl+S` | Save / unsave the current article to the Library |
 | `Ctrl+Y` | Open the Library |
 | `Ctrl+T` | New tab |
@@ -236,7 +240,8 @@ termbrow/
   app.py      # Textual TUI: tabs, toolbar, navigation, commands, wiring
   home.py     # constructive home page (Wikipedia featured, learn, civic, library)
   fetch.py    # fetch chain (direct → browser headers → Wayback) + ad-strip
-  curate.py   # search + For You feed with explore/exploit (HN, Wikipedia, RSS)
+  curate.py   # search (GDELT news + HN + Wikipedia, sort + per-domain diversity)
+              # and the For You feed with explore/exploit
   cookies.py  # session import (browser_cookie3 + cookies.txt) for logged-in reads
   tor.py      # Tor SOCKS proxy detection/config for .onion access (+ Whonix)
   store.py    # local history, topic weights, saved library, preferences

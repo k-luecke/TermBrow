@@ -18,14 +18,22 @@ from __future__ import annotations
 import asyncio
 import random
 import re
+import time
 from dataclasses import dataclass
-from urllib.parse import quote_plus, unquote, urlparse
+from urllib.parse import quote, quote_plus, unquote, urlparse
 
 import feedparser
 import httpx
 
 from . import tor
 from .fetch import HEADERS
+
+# GDELT: a keyless global news index that returns DIRECT article URLs from a
+# huge diversity of outlets (the antidote to "just a Guardian article"). It
+# throttles to one request per ~5s, so we space our calls and fail soft.
+_GDELT_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
+_GDELT_MIN_INTERVAL = 5.0
+_gdelt_last_call = -1e9
 
 # Ahmia's onion search service (abuse-filtered). Reached through Tor; the
 # clearnet site is JavaScript-gated, so we query the onion when Tor is up.
@@ -77,9 +85,45 @@ def _dedupe(articles: list[Article], limit: int) -> list[Article]:
     return out
 
 
-def _hn_search(query: str, limit: int, page: int = 0) -> list[Article]:
+def _gdelt_search(query: str, limit: int, sort: str) -> list[Article]:
+    """Diverse, direct-URL world news via GDELT. `sort`: 'newest' | 'relevance'.
+
+    English-filtered; fails soft (returns []) on GDELT's rate-limit or any error
+    so a throttled news index never breaks search."""
+    global _gdelt_last_call
+    now = time.monotonic()
+    if now - _gdelt_last_call < _GDELT_MIN_INTERVAL:
+        return []  # respect GDELT's 1-per-5s limit rather than get blocked
+    _gdelt_last_call = now
+    gsort = "datedesc" if sort == "newest" else "hybridrel"
     url = (
-        "https://hn.algolia.com/api/v1/search"
+        f"{_GDELT_URL}?query={quote(query + ' sourcelang:english')}"
+        f"&mode=artlist&maxrecords={limit}&format=json&sort={gsort}"
+    )
+    try:
+        r = httpx.get(url, headers=HEADERS, timeout=20)
+        articles = r.json().get("articles", [])  # non-JSON (rate limit) -> raises
+    except Exception:
+        return []
+    out = []
+    for a in articles:
+        link, title = a.get("url"), a.get("title")
+        if not link or not title:
+            continue
+        sd = a.get("seendate", "")
+        date = f"{sd[0:4]}-{sd[4:6]}-{sd[6:8]}" if len(sd) >= 8 else ""
+        out.append(Article(
+            title=title, url=link, source=a.get("domain") or _host(link),
+            date=f"news {date}" if date else "news",
+        ))
+    return out
+
+
+def _hn_search(query: str, limit: int, page: int = 0, sort: str = "relevance") -> list[Article]:
+    # HN Algolia has two endpoints: relevance-ranked and strictly by date.
+    endpoint = "search_by_date" if sort == "newest" else "search"
+    url = (
+        f"https://hn.algolia.com/api/v1/{endpoint}"
         f"?query={quote_plus(query)}&tags=story&hitsPerPage={limit}&page={page}"
     )
     r = httpx.get(url, headers=HEADERS, timeout=15)
@@ -246,18 +290,40 @@ def _onion_search(query: str, limit: int) -> list[Article]:
     return out
 
 
-def _search_sync(query: str, limit: int, page: int = 0) -> list[Article]:
+def _diverse(articles: list[Article], limit: int, max_per_host: int = 2) -> list[Article]:
+    """Dedupe by URL and cap results per domain, so no single outlet dominates
+    (why a leaks search shouldn't return five Guardian pieces)."""
+    seen: set[str] = set()
+    hosts: dict[str, int] = {}
+    out: list[Article] = []
+    for a in articles:
+        key = a.url.split("?")[0].rstrip("/")
+        host = _host(a.url)
+        if not a.url.startswith("http") or key in seen or not a.title.strip():
+            continue
+        if hosts.get(host, 0) >= max_per_host:
+            continue
+        seen.add(key)
+        hosts[host] = hosts.get(host, 0) + 1
+        out.append(a)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _search_sync(query: str, limit: int, page: int = 0, sort: str = "relevance") -> list[Article]:
     per = max(4, limit)
-    articles = _dedupe(_gather([
-        lambda: _hn_search(query, per, page=page),
-        lambda: _wiki_search(query, 3, offset=page * 3),
-    ]), limit)
-    # Onion results are page-0 only (Ahmia paging is unreliable over Tor).
+    # GDELT (diverse world news) and Wikipedia enrich page 0; deeper pages page
+    # through Hacker News, which has clean offset paging.
+    gdelt = _gdelt_search(query, 20, sort) if page == 0 else []
+    hn = _hn_search(query, per, page=page, sort=sort)
+    wiki = _wiki_search(query, 3, offset=page * 3) if page == 0 else []
+    # News first (freshest/most on-point for "recent news …"), then community,
+    # then reference — all passed through the per-domain diversity cap.
+    articles = _diverse(gdelt + hn + wiki, limit)
     onions = _onion_search(query, 5) if page == 0 else []
     if not onions:
         return articles
-    # Keep room for onion results (the reader asked for them mixed in), then
-    # append them clearly at the end so clearnet stays first.
     keep = max(0, limit - len(onions))
     return articles[:keep] + onions
 
@@ -342,8 +408,9 @@ def _feed_sync(keywords, read_urls, explore_ratio, limit) -> list[Article]:
     return _interleave(exp_picks, disc_picks, limit)
 
 
-async def search(query: str, limit: int = 15, page: int = 0) -> list[Article]:
-    return await asyncio.to_thread(_search_sync, query, limit, page)
+async def search(query: str, limit: int = 15, page: int = 0,
+                 sort: str = "relevance") -> list[Article]:
+    return await asyncio.to_thread(_search_sync, query, limit, page, sort)
 
 
 async def feed(keywords, read_urls=None, explore_ratio: float = 0.4,

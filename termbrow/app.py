@@ -126,6 +126,8 @@ class ReaderTab(TabPane):
         self.last_url: str = ""           # last URL *attempted* (even if it failed)
         self.page_title: str = title
         self.view: str = "home"           # home | article | search | library | history
+        self.search_query: str = ""       # last query in this tab (for re-sort/paging)
+        self.search_page: int = 0
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(classes="reader"):
@@ -195,6 +197,7 @@ class TermBrow(App):
         ("ctrl+b", "back", "Back"),
         ("ctrl+o", "open_external", "Open in browser"),
         ("ctrl+h", "show_history", "History"),
+        ("ctrl+k", "toggle_sort", "Sort"),
         ("ctrl+t", "new_tab", "New tab"),
         ("ctrl+w", "close_tab", "Close tab"),
         ("ctrl+pagedown", "next_tab", "Next tab"),
@@ -218,6 +221,7 @@ class TermBrow(App):
         self._explore_idx = 1        # default: Balanced
         self._tab_seq = 1            # last-assigned tab number (tab-1 exists)
         self._new_tab_links = False  # when True, clicks open a background tab
+        self._sort_mode = "relevance"  # search sort: "relevance" | "newest"
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -271,8 +275,13 @@ class TermBrow(App):
             pass
 
     def _sync_chrome(self, tab: ReaderTab) -> None:
-        self.query_one("#addrbar", Input).value = tab.page_url
-        self.sub_title = tab.page_title[:60] if tab.page_title else "reading browser"
+        # Guarded: a worker may finish during teardown, after the chrome has
+        # left the DOM — harmless, so don't let it crash the worker.
+        try:
+            self.query_one("#addrbar", Input).value = tab.page_url
+            self.sub_title = tab.page_title[:60] if tab.page_title else "reading browser"
+        except Exception:
+            pass
 
     @staticmethod
     def _inject_meta(md: str, meta_line: str) -> str:
@@ -342,6 +351,13 @@ class TermBrow(App):
             self.show_cookies()
         elif name == "tor":
             self._cmd_tor(rest)
+        elif name == "sort":
+            r = rest.lower()
+            if r in ("newest", "relevance"):
+                self._sort_mode = r
+                self._rerun_search()
+            else:
+                self.action_toggle_sort()
         elif name in ("onion",) or (name == "help" and rest.lower() == "onion"):
             self.run_worker(
                 self._render_view(self.active_tab(), "help", "Onion / Tor help",
@@ -598,10 +614,11 @@ class TermBrow(App):
     @work(exclusive=True, group="search")
     async def run_search(self, query: str, page: int = 0) -> None:
         tab = self.active_tab()
+        tab.search_query, tab.search_page = query, page
         self._set_loading(tab, True)
         self._status(f"Searching  “{query}”" + (f"  (page {page + 1})" if page else ""))
         try:
-            results = await curate.search(query, page=page)
+            results = await curate.search(query, page=page, sort=self._sort_mode)
         except Exception as exc:
             self._set_loading(tab, False)
             self._show_error(tab, f"search: {query}", str(exc))
@@ -622,7 +639,12 @@ class TermBrow(App):
             self._finish_search_view(tab, query)
             return
 
-        lines = [f"# Search — “{query}”  ·  page {page + 1}", ""]
+        sort_label = "newest first" if self._sort_mode == "newest" else "most relevant"
+        lines = [
+            f"# Search — “{query}”",
+            f"*page {page + 1}  ·  sorted by {sort_label}  ·  `Ctrl+K` to re-sort*",
+            "",
+        ]
         if any(a.onion for a in results):
             lines.append(
                 "> 🧅 = Tor onion result (via Ahmia, abuse-filtered but "
@@ -881,6 +903,18 @@ class TermBrow(App):
 
     def action_show_history(self) -> None:
         self.show_history()
+
+    def action_toggle_sort(self) -> None:
+        self._sort_mode = "newest" if self._sort_mode == "relevance" else "relevance"
+        label = "newest first" if self._sort_mode == "newest" else "most relevant"
+        self._status(f"Sort: {label}")
+        self._rerun_search()
+
+    def _rerun_search(self) -> None:
+        """Re-run the active tab's search (e.g. after changing sort)."""
+        tab = self.active_tab()
+        if tab.view == "search" and tab.search_query:
+            self.run_search(tab.search_query, page=tab.search_page)
 
     def action_refresh_feed(self) -> None:
         self._status("Refreshing feed…")
