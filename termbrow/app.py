@@ -13,6 +13,7 @@ just means you rarely need the mouse.
 """
 from __future__ import annotations
 
+import textwrap
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
@@ -40,13 +41,20 @@ class FeedButton(Button):
 
     def __init__(self, article: curate.Article) -> None:
         source = article.source or "web"
-        title = article.title if len(article.title) <= 46 else article.title[:45] + "…"
         discover = article.kind == "discover"
         marker = "◇ " if discover else ""
         classes = "feed-item discover" if discover else "feed-item"
-        super().__init__(f"{marker}{title}\n[{source}]", classes=classes)
+        # Wrap the title to the box width (max two lines) so headlines never
+        # spill outside the chip; the full title lives in the tooltip.
+        lines = textwrap.wrap(marker + article.title, width=30) or [marker or "…"]
+        shown = lines[:2]
+        if len(lines) > 2:
+            shown[1] = shown[1][:27].rstrip() + "…"
+        label = "\n".join(shown) + f"\n[{source[:26]}]"
+        super().__init__(label, classes=classes)
         self.url = article.url
-        self.tooltip = "Discovery — new but related" if discover else "From your interests"
+        kind = "Discovery — new but related" if discover else "From your interests"
+        self.tooltip = f"{article.title}\n\n{kind} · {source}"
 
 
 class ReaderTab(TabPane):
@@ -56,6 +64,7 @@ class ReaderTab(TabPane):
         super().__init__(title, id=tab_id)
         self.nav: list[str] = []          # per-tab navigation back-stack (URLs)
         self.page_url: str = ""           # canonical URL of the current article
+        self.last_url: str = ""           # last URL *attempted* (even if it failed)
         self.page_title: str = title
         self.view: str = "home"           # home | article | search | library | history
 
@@ -101,9 +110,9 @@ class TermBrow(App):
     /* For You carousel — a single quiet strip, same place every page. */
     #feed-wrap { height: auto; }
     #feed-label { color: $text-muted; padding: 0 2; text-style: bold; }
-    #feed { height: 5; padding: 0 1; scrollbar-size-horizontal: 1; }
+    #feed { height: 6; padding: 0 1; scrollbar-size-horizontal: 1; }
     .feed-item {
-        width: 30; height: 3; margin: 0 1 0 0;
+        width: 34; height: 5; margin: 0 1 0 0;
         border: round $primary 40%; background: $surface;
         color: $text; text-align: left;
     }
@@ -125,6 +134,7 @@ class TermBrow(App):
     BINDINGS = [
         ("ctrl+l", "focus_address", "Address"),
         ("ctrl+b", "back", "Back"),
+        ("ctrl+o", "open_external", "Open in browser"),
         ("ctrl+h", "show_history", "History"),
         ("ctrl+t", "new_tab", "New tab"),
         ("ctrl+w", "close_tab", "Close tab"),
@@ -291,6 +301,14 @@ class TermBrow(App):
             self.show_history()
         elif name == "library":
             self.show_library()
+        elif name == "back":
+            self.action_back()
+        elif name == "reload":
+            target = self.active_tab().last_url
+            if target:
+                self.load_url(target, new_tab=False)
+        elif name == "external":
+            self.action_open_external()
         elif name == "area":
             addr = self.query_one("#addrbar", Input)
             addr.focus()
@@ -355,6 +373,7 @@ class TermBrow(App):
             tab = self.active_tab()
             self._set_tab_label(tab, "⟳ Loading…")
 
+        tab.last_url = url                 # remembered so Ctrl+O / retry can act
         self._set_loading(tab, True)
         self._status(f"Loading  {url}")
         try:
@@ -395,18 +414,29 @@ class TermBrow(App):
         self.refresh_feed()
 
     def _show_error(self, tab: ReaderTab, url: str, detail: str) -> None:
+        hint = ""
+        if "403" in detail:
+            hint = (
+                "\n**403** means the site blocked an automated reader (bot "
+                "protection). It will usually still open in your normal browser.\n"
+            )
+        elif "404" in detail:
+            hint = "\n**404** means the page no longer exists at that address.\n"
         md = (
-            f"# Could not load page\n\n"
+            f"# Couldn't load this page\n\n"
             f"**{url}**\n\n"
-            f"> {detail}\n\n"
+            f"> {detail}\n{hint}\n"
             "TermBrow tried a direct fetch, a full browser fingerprint, and the "
-            "Wayback Machine. The site may require login, be JavaScript-only with "
-            "no archived snapshot, or be offline. Try another link or a search."
+            "Wayback Machine. What next:\n\n"
+            "- [↻ Retry](termbrow:reload)\n"
+            "- [Open in your web browser](termbrow:external)  — loads with cookies "
+            "and JavaScript, outside TermBrow\n"
+            "- [Back](termbrow:back)  ·  [Home](termbrow:home)\n"
         )
-        tab.view = "article"
+        tab.view = "error"
         tab.page_url = ""
         self.run_worker(tab.article.update(md), group="render", exclusive=False)
-        self._status(f"Error: {detail[:70]}")
+        self._status(f"Error: {detail[:66]} — Ctrl+O opens it in your browser")
 
     # ---------------------------------------------------------------- search
     @work(exclusive=True, group="search")
@@ -530,6 +560,20 @@ class TermBrow(App):
 
     def action_home(self) -> None:
         self.go_home()
+
+    def action_open_external(self) -> None:
+        """Deliberately open the current/last URL in the system web browser.
+
+        This is the on-purpose version of what we removed by disabling Markdown's
+        auto-open: sites that block in-app reading (403) or need JavaScript can be
+        handed to the real browser, but only when the reader asks for it."""
+        tab = self.active_tab()
+        target = tab.page_url or tab.last_url
+        if not target:
+            self._status("No page URL to open in your browser.")
+            return
+        self.open_url(target)
+        self._status(f"Opened in your web browser: {target[:70]}")
 
     def action_back(self) -> None:
         tab = self.active_tab()
